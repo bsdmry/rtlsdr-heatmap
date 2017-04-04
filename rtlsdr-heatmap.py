@@ -2,37 +2,27 @@
 import json
 import pandas as pd
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.style.use('ggplot')
 
-start_f = 430.000
-stop_f = 435.000
-step_f = 0.02500
+step_f = 0.0250
 min_weight = []
 pdgps = pd.DataFrame()
 pdsig = pd.DataFrame()
 end_df = pd.DataFrame()
-def oper_f(frame):
-    frame =  pd.concat([frame.groupby(pd.cut(frame["freq"], np.arange(start_f, stop_f+step_f, step_f))).mean(), avg_dev_band], axis=1)
-    frame.columns = ['ts', 'avg_freq', 'db', 'db_avg', 'db_dev']
-    frame['point'] = frame.apply(lambda row: round(((row['db'] - row['db_avg'])/row['db_dev']),2), axis=1)
-    frame = frame.drop(['db', 'db_avg', 'db_dev'], axis=1)
-    min_weight.append( frame['point'].min())
 
-def up_mark(frame, add):
-    global end_df
-    frame =  pd.concat([frame.groupby(pd.cut(frame["freq"], np.arange(start_f, stop_f+step_f, step_f))).mean(), avg_dev_band], axis=1)
-    frame.columns = ['ts', 'avg_freq', 'db', 'db_avg', 'db_dev']
-    frame['point'] = frame.apply(lambda row: round((((row['db'] - row['db_avg'])/row['db_dev'] + add)*10 ),2), axis=1)
-    frame = frame.drop(['avg_freq', 'db', 'db_avg', 'db_dev'], axis=1)
-    frame = frame.dropna()
-    #cats =  frame.index.categories
-    frame = frame.reset_index()
-    frame = frame.pivot(index='ts', columns='freq', values='point')
-    end_df = pd.concat([end_df, frame])
+def save_pic(frame, x_axis, y_axis, name):
+    ax = frame.plot(x=x_axis, y=y_axis, figsize=(20,3), color='g')
+    fig = ax.get_figure()
+    fig.savefig(name, dpi=100)
+    plt.close('all')
 
-with open('/storage/scan430_435.rfs') as data_file:    
+with open('scan.rfs') as data_file:    
     data = json.load(data_file)
-#print data[1]['Start']
-#print data[1]['Stop']
+
+start_f = float(data[1]['Start'])
+stop_f = float(data[1]['Stop'])
 
 #pd.set_option('expand_frame_repr', False)
 
@@ -41,7 +31,6 @@ for times, loc in data[1]['Location'].iteritems():
     tf = pd.DataFrame({'ts' : [int(float(times))], 'lat':[float(loc[0])], 'lon':[float(loc[1])]})
     pdgps =  pdgps.append(tf)
 pdgps =  pdgps.set_index('ts')
-
 
 data_arr = []
 for time2 in data[1]['Spectrum']:
@@ -59,21 +48,29 @@ bands_num = avg_dev_band.index.categories.values.size
 band_names = np.linspace(start_f,stop_f,bands_num, endpoint=False).tolist() 
 
 group_a = pdsig.groupby(pdsig["ts"])
-group_a.apply(lambda tab: oper_f(tab))
-pdsig.groupby(pdsig["ts"]).apply(lambda tab: up_mark(tab, abs(min(min_weight)) ))
+#-------------------GOOD!
+pdsig['freq'] = pd.Categorical(pd.cut(pdsig["freq"], np.arange(start_f, stop_f+step_f, step_f)))
+avg_freqs = pdsig.groupby(["ts", 'freq']).mean()
+#save_pic()
+avg_freqs = avg_freqs.join(avg_dev_band, how='inner')
+value_points = avg_freqs.apply(lambda row: ((row['db'] - row['db_avg'])/row['db_dev']), axis=1)
+mval = value_points.min()
+value_points = value_points.apply(lambda row: round(( (row+abs(mval)*10)),2))
+value_points = value_points.reset_index()
+value_points.columns = ['ts', 'freq', 'point']
+value_points = value_points.pivot(index='ts', columns='freq', values='point')
+#-----------------------
 
-end_df.drop_duplicates(inplace=True)
+value_points.drop_duplicates(inplace=True)
 pdgps["spectrum"] = np.nan
-pdgps =  pd.concat([pdgps, end_df], axis=1)
-
+pdgps =  pd.concat([pdgps, value_points], axis=1)
 pdgps = pdgps.reset_index()
 pdgps = pdgps.astype('object')
 pdgps['spectrum']  = pdgps.iloc[:,4:].values.tolist()
 pdgps = pdgps.iloc[:,:4]
+pdgps = pdgps.dropna()
 pdgps = pdgps[['lat', 'lon','ts', 'spectrum']]
 pdgps = pdgps.to_dict(orient='records')
-#print pdgps.to_json(orient='records')
 
-#print band_names
 json_dict = {'bands':band_names, 'startf':start_f, 'stopf':stop_f ,'band_width':step_f, 'points':pdgps}
 print json.dumps(json_dict)
